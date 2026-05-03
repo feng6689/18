@@ -2,7 +2,6 @@ import cv2
 import os
 import csv
 import matplotlib.pyplot as plt
-import numpy as np
 from collections import defaultdict
 
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
@@ -28,10 +27,6 @@ def main():
     
     stats = defaultdict(int)
     csv_data = []
-    
-    print("\n" + "="*60)
-    print("开始处理图片...")
-    print("="*60)
     
     for img_name in os.listdir(img_dir):
         if not img_name.endswith(('.jpg', '.png', '.jpeg')):
@@ -75,6 +70,7 @@ def main():
         
         all_dets.sort(key=lambda d: -d['conf'])
         final_dets = []
+        used = set()
         
         for det in all_dets:
             overlap = False
@@ -172,12 +168,12 @@ def main():
         plt.close()
         print(f"保存直方图: {hist_file}")
     
-    print("\n" + "="*60)
-    print("所有处理完成! 统计结果:")
-    print("="*60)
+    print("\n" + "="*50)
+    print("完成统计:")
     for name, cnt in stats.items():
         print(f"  {name}: {cnt} 个")
-    print("="*60)
+    print("="*50)
 
 if __name__ == "__main__":
+    import numpy as np
     main()
