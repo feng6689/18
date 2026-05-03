@@ -36,96 +36,123 @@ class TemplateMatcher:
         gray = cv2.equalizeHist(gray)
         return gray
 
-    def match_single_template(self, image, template, method=cv2.TM_CCOEFF_NORMED):
-        if image is None or template is None:
-            return 0.0
+    def detect_multiscale(self, image, threshold=0.3):
+        detections = []
         
-        img_gray = self.preprocess_image(image)
-        temp_gray = self.preprocess_image(template)
-        
-        if img_gray.shape[0] < 10 or img_gray.shape[1] < 10:
-            return 0.0
-        
-        img_h, img_w = img_gray.shape
-        temp_h, temp_w = temp_gray.shape
-        
-        scales = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-        best_score = 0.0
-        
-        for scale in scales:
-            try:
-                new_w = int(temp_w * scale)
-                new_h = int(temp_h * scale)
+        for template_name, template in self.templates.items():
+            template_gray = self.preprocess_image(template)
+            image_gray = self.preprocess_image(image)
+            
+            h, w = template_gray.shape
+            
+            scales = np.linspace(0.5, 3.0, 10)[::-1]
+            
+            for scale in scales:
+                new_w = int(w * scale)
+                new_h = int(h * scale)
                 
-                if new_w < 10 or new_h < 10:
+                if new_w < 20 or new_h < 20:
                     continue
-                if new_w > img_w * 2 or new_h > img_h * 2:
+                if new_w > image_gray.shape[1] * 0.8 or new_h > image_gray.shape[0] * 0.8:
                     continue
                 
-                resized_template = cv2.resize(temp_gray, (new_w, new_h))
+                resized = cv2.resize(template_gray, (new_w, new_h))
                 
-                if img_h < new_h or img_w < new_w:
-                    if new_h > 0 and new_w > 0:
-                        resized_img = cv2.resize(img_gray, (new_w, new_h))
-                        result = cv2.matchTemplate(resized_img, resized_template, method)
-                        _, max_val, _, _ = cv2.minMaxLoc(result)
-                        if max_val > best_score:
-                            best_score = max_val
-                    continue
-                
-                result = cv2.matchTemplate(img_gray, resized_template, method)
-                _, max_val, _, _ = cv2.minMaxLoc(result)
-                
-                if max_val > best_score:
-                    best_score = max_val
+                try:
+                    result = cv2.matchTemplate(image_gray, resized, cv2.TM_CCOEFF_NORMED)
                     
-            except Exception as e:
-                continue
+                    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                    
+                    if max_val >= threshold:
+                        top_left = max_loc
+                        bottom_right = (top_left[0] + new_w, top_left[1] + new_h)
+                        
+                        x = top_left[0]
+                        y = top_left[1]
+                        w_box = new_w
+                        h_box = new_h
+                        
+                        roi = image[y:y+h_box, x:x+w_box]
+                        
+                        detections.append({
+                            'roi': roi,
+                            'bounding_rect': (x, y, w_box, h_box),
+                            'label': template_name,
+                            'confidence': max_val,
+                            'classification_success': True,
+                            'shape_type': 'unknown',
+                            'color': 'unknown'
+                        })
+                except Exception as e:
+                    continue
         
-        return best_score
+        final_detections = []
+        for det in detections:
+            x1, y1, w1, h1 = det['bounding_rect']
+            overlapping = False
+            
+            for final_det in final_detections:
+                x2, y2, w2, h2 = final_det['bounding_rect']
+                
+                overlap_x1 = max(x1, x2)
+                overlap_y1 = max(y1, y2)
+                overlap_x2 = min(x1 + w1, x2 + w2)
+                overlap_y2 = min(y1 + h1, y2 + h2)
+                
+                if overlap_x1 < overlap_x2 and overlap_y1 < overlap_y2:
+                    overlap_area = (overlap_x2 - overlap_x1) * (overlap_y2 - overlap_y1)
+                    area1 = w1 * h1
+                    area2 = w2 * h2
+                    iou = overlap_area / min(area1, area2)
+                    
+                    if iou > 0.3:
+                        overlapping = True
+                        if det['confidence'] > final_det['confidence']:
+                            final_detections.remove(final_det)
+                            final_detections.append(det)
+                        break
+            
+            if not overlapping:
+                final_detections.append(det)
+        
+        return final_detections
 
-    def match_with_features(self, image, template):
-        try:
-            img_gray = self.preprocess_image(image)
-            temp_gray = self.preprocess_image(template)
-            
-            orb = cv2.ORB_create()
-            kp1, des1 = orb.detectAndCompute(img_gray, None)
-            kp2, des2 = orb.detectAndCompute(temp_gray, None)
-            
-            if des1 is None or des2 is None:
-                return 0.0
-            if len(des1) < 2 or len(des2) < 2:
-                return 0.0
-            
-            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-            matches = bf.match(des1, des2)
-            
-            if len(matches) == 0:
-                return 0.0
-            
-            good_matches = [m for m in matches if m.distance < 50]
-            score = len(good_matches) / max(len(kp1), len(kp2), 1)
-            
-            return min(score * 2, 1.0)
-        except Exception as e:
-            return 0.0
-
-    def classify(self, image, threshold=0.55):
+    def classify(self, image, threshold=0.25):
         best_match = None
         best_score = 0.0
         
         for name, template in self.templates.items():
-            tm_score = self.match_single_template(image, template)
-            feat_score = self.match_with_features(image, template)
-            
-            combined_score = tm_score * 0.7 + feat_score * 0.3
-            
-            if combined_score > best_score:
-                best_score = combined_score
-                best_match = name
+            try:
+                img_gray = self.preprocess_image(image)
+                temp_gray = self.preprocess_image(template)
+                
+                if img_gray.shape[0] < 10 or img_gray.shape[1] < 10:
+                    continue
+                
+                scales = [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 2.0]
+                
+                for scale in scales:
+                    new_w = int(temp_gray.shape[1] * scale)
+                    new_h = int(temp_gray.shape[0] * scale)
+                    
+                    if new_w < 10 or new_h < 10:
+                        continue
+                    
+                    resized = cv2.resize(temp_gray, (new_w, new_h))
+                    
+                    if resized.shape[0] > img_gray.shape[0] or resized.shape[1] > img_gray.shape[1]:
+                        continue
+                    
+                    result = cv2.matchTemplate(img_gray, resized, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(result)
+                    
+                    if max_val > best_score:
+                        best_score = max_val
+                        best_match = name
+            except Exception as e:
+                continue
         
-        if best_score >= threshold:
+        if best_score >= threshold and best_match is not None:
             return {
                 'label': best_match,
                 'confidence': best_score,
@@ -138,7 +165,7 @@ class TemplateMatcher:
                 'success': False
             }
 
-    def classify_multiple(self, regions, threshold=0.55):
+    def classify_multiple(self, regions, threshold=0.25):
         results = []
         for region in regions:
             roi = region.get('roi')

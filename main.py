@@ -65,15 +65,18 @@ def main():
             
             print(f"  图片尺寸: {image.shape[1]} x {image.shape[0]}")
             
-            print("  正在检测候选区域...")
-            min_area = max(100, int(image.shape[0] * image.shape[1] * 0.001))
-            candidates = detector.detect_candidate_regions(image, min_area=min_area)
-            print(f"  检测到 {len(candidates)} 个候选区域")
+            print("  正在使用直接多尺度模板匹配...")
+            valid_detections = matcher.detect_multiscale(image, threshold=0.25)
             
-            print("  正在进行模板匹配分类...")
-            detections = matcher.classify_multiple(candidates, threshold=0.55)
+            if len(valid_detections) == 0:
+                print("  直接匹配未找到，尝试使用颜色+形状检测...")
+                min_area = max(50, int(image.shape[0] * image.shape[1] * 0.0001))
+                candidates = detector.detect_candidate_regions(image, min_area=min_area)
+                print(f"  检测到 {len(candidates)} 个候选区域")
+                
+                detections = matcher.classify_multiple(candidates, threshold=0.25)
+                valid_detections = [d for d in detections if d.get('classification_success', False)]
             
-            valid_detections = [d for d in detections if d.get('classification_success', False)]
             print(f"  成功分类 {len(valid_detections)} 个标志牌")
             
             for det in valid_detections:
@@ -89,12 +92,12 @@ def main():
                 confidence = det['confidence']
                 
                 color = (0, 255, 0)
-                if det['color'] == 'red':
+                if label == 'stop':
                     color = (0, 0, 255)
-                elif det['color'] == 'blue':
-                    color = (255, 0, 0)
-                elif det['color'] == 'yellow':
+                elif label == 'slow':
                     color = (0, 255, 255)
+                elif label == '80':
+                    color = (255, 0, 0)
                 
                 cv2.rectangle(output_image, (x, y), (x + w, y + h), color, 3)
                 

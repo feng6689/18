@@ -3,16 +3,16 @@ import numpy as np
 
 class SignDetector:
     def __init__(self):
-        self.red_lower1 = np.array([0, 120, 70])
-        self.red_upper1 = np.array([10, 255, 255])
-        self.red_lower2 = np.array([170, 120, 70])
+        self.red_lower1 = np.array([0, 50, 50])
+        self.red_upper1 = np.array([15, 255, 255])
+        self.red_lower2 = np.array([165, 50, 50])
         self.red_upper2 = np.array([180, 255, 255])
         
-        self.blue_lower = np.array([90, 120, 70])
-        self.blue_upper = np.array([130, 255, 255])
+        self.blue_lower = np.array([80, 50, 50])
+        self.blue_upper = np.array([140, 255, 255])
         
-        self.yellow_lower = np.array([15, 120, 70])
-        self.yellow_upper = np.array([35, 255, 255])
+        self.yellow_lower = np.array([10, 50, 50])
+        self.yellow_upper = np.array([40, 255, 255])
 
     def detect_by_color(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -40,7 +40,7 @@ class SignDetector:
                 continue
             
             perimeter = cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, 0.04 * perimeter, True)
+            approx = cv2.approxPolyDP(contour, 0.05 * perimeter, True)
             vertices = len(approx)
             
             x, y, w, h = cv2.boundingRect(contour)
@@ -49,18 +49,15 @@ class SignDetector:
             shape_type = 'unknown'
             if vertices == 3:
                 shape_type = 'triangle'
-            elif vertices == 4:
-                if 0.85 <= aspect_ratio <= 1.15:
-                    shape_type = 'square'
-                else:
-                    shape_type = 'rectangle'
-            elif vertices >= 8:
-                shape_type = 'circle'
+            elif 3 < vertices <= 6:
+                shape_type = 'rectangle'
             else:
                 (x_circle, y_circle), radius = cv2.minEnclosingCircle(contour)
                 circle_area = np.pi * radius * radius
-                if area / circle_area > 0.7:
+                if area / circle_area > 0.4:
                     shape_type = 'circle'
+                else:
+                    shape_type = 'rectangle'
             
             shapes.append({
                 'contour': contour,
@@ -80,23 +77,51 @@ class SignDetector:
         all_candidates = []
         
         for color_name, mask in color_masks.items():
-            kernel = np.ones((5, 5), np.uint8)
+            kernel = np.ones((3, 3), np.uint8)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel, iterations=1)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
             
             shapes = self.find_shapes(mask, min_area)
             
             for shape in shapes:
                 x, y, w, h = shape['bounding_rect']
+                x = max(0, x - 5)
+                y = max(0, y - 5)
+                w = min(image.shape[1] - x, w + 10)
+                h = min(image.shape[0] - y, h + 10)
                 roi = image[y:y+h, x:x+w]
                 
                 all_candidates.append({
                     'roi': roi,
-                    'bounding_rect': shape['bounding_rect'],
+                    'bounding_rect': (x, y, w, h),
                     'shape_type': shape['shape_type'],
                     'color': color_name,
                     'area': shape['area'],
                     'contour': shape['contour']
+                })
+        
+        if len(all_candidates) == 0:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edged = cv2.Canny(blurred, 50, 150)
+            
+            contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < min_area:
+                    continue
+                
+                x, y, w, h = cv2.boundingRect(contour)
+                roi = image[y:y+h, x:x+w]
+                
+                all_candidates.append({
+                    'roi': roi,
+                    'bounding_rect': (x, y, w, h),
+                    'shape_type': 'unknown',
+                    'color': 'unknown',
+                    'area': area,
+                    'contour': contour
                 })
         
         return all_candidates
